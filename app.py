@@ -9,7 +9,7 @@ from scipy.optimize import minimize
 # CONFIGURACIÓN
 # ==========================================
 st.set_page_config(page_title="Frontera Eficiente - Markowitz", layout="wide")
-st.title("Optimización de Portafolio - Markowitz con Yahoo Finance")
+st.title("Optimización de Portafolio - Markowitz (Yahoo Finance)")
 
 # ==========================================
 # INPUTS
@@ -17,7 +17,7 @@ st.title("Optimización de Portafolio - Markowitz con Yahoo Finance")
 st.sidebar.header("Parámetros")
 
 tickers_input = st.sidebar.text_input(
-    "Tickers (separados por coma)",
+    "Tickers separados por coma",
     value="AMZN,MSFT,GOOGL,BTC-USD,GC=F"
 )
 
@@ -26,7 +26,7 @@ end_date = st.sidebar.date_input("Fecha fin", pd.to_datetime("today"))
 
 rf = st.sidebar.number_input("Tasa libre de riesgo", 0.0, 0.2, 0.05)
 
-tickers = [t.strip() for t in tickers_input.split(",")]
+tickers = [t.strip().upper() for t in tickers_input.split(",")]
 
 # ==========================================
 # BOTÓN
@@ -34,43 +34,52 @@ tickers = [t.strip() for t in tickers_input.split(",")]
 if st.sidebar.button("Cargar datos"):
 
     # ======================================
-    # DESCARGA
+    # DESCARGA (USANDO CLOSE SIEMPRE)
     # ======================================
-    data = yf.download(tickers, start=start_date, end=end_date)["Adj Close"]
+    data_raw = yf.download(tickers, start=start_date, end=end_date)
 
-    if data.empty:
-        st.error("No se pudieron descargar datos. Verifica los tickers.")
+    if data_raw.empty:
+        st.error("No se pudieron descargar datos")
         st.stop()
 
+    # ======================================
+    # MANEJO ROBUSTO MULTIINDEX
+    # ======================================
+    if isinstance(data_raw.columns, pd.MultiIndex):
+        data = data_raw["Close"]
+    else:
+        data = data_raw[["Close"]]
+
+    # Limpieza
     data = data.dropna()
 
-    st.subheader("Precios")
+    # Validación mínima
+    if data.shape[1] < 2:
+        st.error("Se requieren al menos 2 activos válidos")
+        st.stop()
+
+    st.subheader("Precios (Close)")
     st.dataframe(data.tail())
 
     # ======================================
-    # RETORNOS (ROBUSTO)
+    # RETURNS
     # ======================================
     returns = np.log(data / data.shift(1))
     returns = returns.dropna()
 
-    # Eliminar columnas sin variación
+    # eliminar activos sin variación
     returns = returns.loc[:, returns.std() > 0]
 
     if returns.shape[1] < 2:
-        st.error("No hay suficientes activos con datos válidos.")
+        st.error("No hay suficientes activos válidos")
         st.stop()
 
     # ======================================
-    # MATRICES
+    # MATRICES (NUMPY)
     # ======================================
     mu = returns.mean().values * 252
     cov = returns.cov().values * 252
     tickers = returns.columns.tolist()
-
-    # Validación crítica
-    if len(mu) != len(tickers):
-        st.error("Error de dimensiones en los datos.")
-        st.stop()
 
     # ======================================
     # FUNCIONES
@@ -99,21 +108,11 @@ if st.sidebar.button("Cargar datos"):
     constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
 
     try:
-        opt_sharpe = minimize(
-            neg_sharpe,
-            w0,
-            method='SLSQP',
-            bounds=bounds,
-            constraints=constraints
-        )
+        opt_sharpe = minimize(neg_sharpe, w0, method='SLSQP',
+                              bounds=bounds, constraints=constraints)
 
-        opt_min = minimize(
-            volatility,
-            w0,
-            method='SLSQP',
-            bounds=bounds,
-            constraints=constraints
-        )
+        opt_min = minimize(volatility, w0, method='SLSQP',
+                           bounds=bounds, constraints=constraints)
 
     except Exception as e:
         st.error("Error en optimización")
@@ -136,13 +135,8 @@ if st.sidebar.button("Cargar datos"):
         )
 
         try:
-            res = minimize(
-                volatility,
-                w0,
-                method='SLSQP',
-                bounds=bounds,
-                constraints=constraints_eff
-            )
+            res = minimize(volatility, w0, method='SLSQP',
+                           bounds=bounds, constraints=constraints_eff)
             frontier_vol.append(res.fun)
         except:
             frontier_vol.append(np.nan)
@@ -150,7 +144,7 @@ if st.sidebar.button("Cargar datos"):
     # ======================================
     # GRÁFICA
     # ======================================
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(8,5))
 
     ax.plot(frontier_vol, target_returns, 'g-', label="Frontera eficiente")
 
@@ -162,7 +156,7 @@ if st.sidebar.button("Cargar datos"):
 
     ax.set_xlabel("Volatilidad")
     ax.set_ylabel("Rendimiento")
-    ax.set_title("Frontera Eficiente")
+    ax.set_title("Frontera Eficiente - Markowitz")
     ax.legend()
 
     st.pyplot(fig)
@@ -183,9 +177,9 @@ if st.sidebar.button("Cargar datos"):
     st.subheader("Métricas")
 
     st.write(f"Máx Sharpe → Retorno: {ret_s:.2%} | Volatilidad: {vol_s:.2%}")
-    st.write(f"Mín Varianza → Retorno: {ret_m:.2%} | Volatilidad: {vol_m:.2%}")
+    st.write(f"Mín Var → Retorno: {ret_m:.2%} | Volatilidad: {vol_m:.2%}")
 
-    st.subheader("Correlaciones")
+    st.subheader("Correlación")
     st.dataframe(returns.corr())
 
 else:
